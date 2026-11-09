@@ -35,3 +35,54 @@
 @media(max-width:1100px){.family-brand img{width:112px}.family-brand strong{font-size:20px}.family-header-actions .family-roles{display:none}.family-layout{grid-template-columns:250px minmax(0,1fr)}.family-app .family-workspace{padding:14px}.family-app .family-sidebar{padding:17px 12px}.family-stage-head h1{font-size:25px}}
 @media(max-width:760px){.family-app{height:auto;min-height:100dvh;overflow:visible}.family-app .family-header{padding:12px;gap:10px}.family-brand img{width:100px}.family-brand strong{font-size:19px}.family-brand span{font-size:8px}.family-brand div{padding-left:12px}.family-header-actions{gap:6px}.family-header-actions .family-button{padding:7px 9px;font-size:11px}.family-who{display:none}.family-layout{display:flex;flex-direction:column;min-height:0}.family-app .family-sidebar{order:2;min-height:auto;max-height:none;overflow:visible;border-top:1px solid #dbe3db;border-right:0}.family-app .family-workspace{order:1;min-height:640px;height:calc(100dvh - 114px);padding:14px 11px;overflow:visible}.family-stage-head .family-button{display:none}.family-stage-head h1{font-size:23px}.family-stage-head p{display:none}.family-tabs{width:100%}.family-tabs button{flex:1;white-space:normal}.family-catalog{grid-template-columns:repeat(6,minmax(0,1fr));overflow:visible}.family-catalog-figure{height:98px;padding:4px 2px}.family-catalog-figure .family-preview{max-height:69px}.family-catalog-figure span{font-size:9px}.family-bottom-actions .family-button{white-space:normal}.family-name-label input{width:120px}.family-identity{margin-bottom:45px}.family-identity span{display:none}.family-login-grid{grid-template-columns:1fr}.family-landing-shell{width:min(610px,calc(100% - 36px))}.family-landing-sub{font-size:16px}.family-landing h1{font-size:clamp(45px,10vw,70px)}}
 @media(max-width:460px){.family-catalog{grid-template-columns:repeat(4,minmax(0,1fr))}.family-app .family-workspace{min-height:610px}.family-figure-art{max-width:100%}.family-board{min-height:320px}.family-placed svg{max-height:118px}.family-header .family-connection{display:none}}
+
+
+/* Herramientas de dibujo y texto, aisladas de las figuras familiares */
+.family-tool-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:1px 0 18px;padding:4px;background:#edf2ed;border:1px solid #e0e7df;border-radius:12px;flex-shrink:0}
+.family-tool-tabs button{border:0;background:transparent;color:#5e7969;border-radius:9px;padding:9px 6px;font-size:12px;font-weight:730;cursor:pointer}
+.family-tool-tabs button.active{background:#315541;color:white;box-shadow:0 2px 7px #193d281f}
+.family-annotation-tools{display:flex;flex-direction:column;gap:12px;min-height:0}
+.family-annotation-tools .family-section-top{margin-bottom:4px}
+.family-note-label{display:flex;flex-direction:column;gap:6px;color:#58715d;font-size:11px;font-weight:730}
+.family-note-label textarea,.family-edit-mark-text{border:1px solid #d4e0d5;border-radius:10px;background:#fff;color:#31473a;resize:vertical;width:100%;min-height:55px;padding:9px 10px;font-family:inherit;font-size:13px;line-height:1.4}
+.family-text-settings{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:7px}
+.family-text-settings select,.family-editor-field select{min-width:104px;max-width:150px;border:1px solid #d9e4d9;background:white;color:#2f4c3c;border-radius:9px;padding:8px;font-size:12px}
+.family-format-buttons{display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid #dce6db;background:#f8faf7;border-radius:9px}
+.family-format-buttons button{min-width:34px;height:32px;border:0;background:transparent;border-radius:6px;font-size:15px;color:#3a5143;display:grid;place-items:center;cursor:pointer}
+.family-format-buttons button.active{background:#345844;color:white}
+.family-format-buttons button:not(:disabled):hover{background:#e1ebe0}
+.family-format-buttons button.active:not(:disabled):hover{background:#2c503d}
+.family-color-palette{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.family-color-swatch{height:23px;width:23px;border:2px solid #fff;border-radius:50%;padding:0;outline:1px solid #d3dbd3;cursor:pointer;flex-shrink:0}
+.family-color-swatch.active{box-shadow:0 0 0 2px #2e5540}
+.family-color-swatch:focus-visible{outline:3px solid #9ac0a2;outline-offset:2px}
+.family-color-custom{position:relative;width:24px;height:24px;border:1px dashed #9eb19d;border-radius:50%;overflow:hidden;display:grid;place-items:center;color:#3b6149;background:#f8faf7;cursor:pointer}
+.family-color-custom>span{font-size:17px;line-height:1}
+.family-color-custom input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;padding:0}
+.family-add-note{width:100%;justify-content:center!important;margin-top:3px;font-size:12px!important}
+.family-shapes-divider{height:1px;background:#e3eae2;margin:4px 0}
+.family-shape-buttons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.family-shape-buttons button{min-width:0;border:1px solid #dbe5da;background:#f8faf7;border-radius:10px;padding:11px 3px 9px;color:#3a5b46;font-size:10px;font-weight:700;display:flex;flex-direction:column;gap:5px;align-items:center;cursor:pointer}
+.family-shape-buttons button>span{font-size:30px;line-height:1;color:#3d7553}
+.family-shape-buttons button:not(:disabled):hover{background:#e9f2e8;border-color:#8fb39d}
+.family-mark{position:absolute;display:grid;place-items:center;z-index:4;transform-origin:center center;min-width:34px;min-height:34px;touch-action:none;user-select:none;background:transparent;border:1px solid transparent;border-radius:11px;padding:4px;cursor:grab;max-width:280px}
+.family-mark:active{cursor:grabbing}
+.family-mark:hover{background:#eaf4e94d}
+.family-mark.selected{outline:2px dashed #4b9063;outline-offset:3px;background:#e1efdf4d}
+.family-mark-content{display:block;white-space:pre-wrap;overflow-wrap:break-word;max-width:280px;line-height:1.2;text-align:center;pointer-events:none;font-family:Inter,system-ui,Arial,sans-serif}
+.family-mark-graphic{display:block;pointer-events:none;overflow:visible}
+.family-mark-editor{width:100%;display:flex;flex-direction:column;gap:9px}
+.family-mark-editor-header,.family-mark-editor-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.family-mark-editor-header{justify-content:space-between;color:#375542;font-size:12px}
+.family-mark-editor-header .family-chip{margin-left:auto}
+.family-mark-editor-row{border-top:1px solid #edf0ea;padding-top:8px}
+.family-mark-editor-row .family-note-label{min-width:180px;flex:1;max-width:360px}
+.family-mark-editor-row .family-edit-mark-text{min-height:43px}
+.family-editor-field{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;color:#6e8474}
+.family-scale-value{font-size:12px;min-width:38px;text-align:center;font-weight:700;color:#385c45}
+.family-download-controls{display:flex;align-items:center;gap:5px;margin-left:auto;padding-left:7px}
+.family-download-controls>span{font-size:11px;font-weight:780;color:#6b7d6c;letter-spacing:.02em;margin-right:3px}
+.family-download-controls .family-button{font-size:11px;border-color:#b7cdbb;background:#f2f8f0}
+.family-download-controls .family-button:not(:disabled):hover{background:#dcebdd}
+@media(max-width:900px){.family-download-controls{margin-left:0;padding-left:0}.family-toolbar{max-height:38dvh;overflow-y:auto}}
+@media(max-width:760px){.family-annotation-tools{gap:10px}.family-mark-editor-row .family-note-label{min-width:145px}.family-mark-graphic{width:76px;height:76px}.family-mark-content{max-width:180px}.family-download-controls{flex-wrap:wrap}}

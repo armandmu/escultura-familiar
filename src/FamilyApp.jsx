@@ -40,7 +40,7 @@ const TEMPLATES = [
   { id: 'a18', color: '#D28F8C', size: 'grande' }
 ];
 const VIEWS = [ { id: 'actual', label: 'Mi familia hoy' }, { id: 'deseada', label: 'Cómo me gustaría que fuera' } ];
-const freshBoard = () => ({ kind: 'family-sculpture', version: 1, activeView: 'actual', locked: false, figures: { actual: [], deseada: [] } });
+const freshBoard = () => ({ kind: 'family-sculpture', version: 2, activeView: 'actual', locked: false, figures: { actual: [], deseada: [] }, annotations: { actual: [], deseada: [] } });
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 const getRow = data => Array.isArray(data) ? data[0] : data;
 const templateOf = id => TEMPLATES.find(t => t.id === id) || TEMPLATES[0];
@@ -65,6 +65,48 @@ function Figure({ template, scale = 1, direction = 'frente', preview = false }) 
       <circle cx="50" cy="29" r="2.2" fill="#36443D"/><path d="M61 31 L66 35 L60 37" fill={template.color} stroke="#47584C" strokeWidth="1.4"/><path d="M48 40 Q52 43 56 41" stroke="#36443D" strokeWidth="2" strokeLinecap="round"/>
     </>}
   </svg>;
+}
+
+
+const MARK_COLORS = [
+  '#2E5641','#D36A61','#5287B9','#E3A93F',
+  '#9469BE','#E18C49','#5D9C80','#4B5563',
+  '#C15C8A','#131A17'
+];
+const MARK_FONTS = { pequeno: 17, mediano: 25, grande: 36 };
+const MARK_LABELS = { text: 'Texto', circle: 'Círculo', square: 'Cuadrado', arrow: 'Flecha' };
+const safeColor = value => /^#[a-f0-9]{6}$/i.test(value || '') ? value : MARK_COLORS[0];
+const cleanAnnotationText = value => String(value || '').replace(/\r/g, '').slice(0, 100).split('\n').slice(0, 3).join('\n');
+
+function MarkVisual({ mark }) {
+  const color = safeColor(mark.color);
+  if (mark.type === 'text') return <span className="family-mark-content" style={{
+    color, fontSize: MARK_FONTS[mark.size] || 25,
+    fontWeight: mark.bold ? 750 : 450,
+    fontStyle: mark.italic ? 'italic' : 'normal',
+    textDecoration: mark.underline ? 'underline' : 'none'
+  }}>{mark.text || 'Texto'}</span>;
+  return <svg className="family-mark-graphic" viewBox="0 0 112 112" width="112" height="112" aria-hidden="true">
+    {mark.type === 'circle' && <circle cx="56" cy="56" r="39" fill={color} fillOpacity=".14" stroke={color} strokeWidth="5"/>}
+    {mark.type === 'square' && <rect x="18" y="18" width="76" height="76" rx="2" fill={color} fillOpacity=".14" stroke={color} strokeWidth="5"/>}
+    {mark.type === 'arrow' && <>
+      <path d="M11 56 H91" stroke={color} strokeWidth="7" strokeLinecap="round"/>
+      <path d="M70 35 L92 56 L70 77" stroke={color} strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+    </>}
+  </svg>;
+}
+
+function ColorPicker({ value, onChange, disabled = false }) {
+  return <div className="family-color-palette" aria-label="Paleta de colores">
+    {MARK_COLORS.map(color => <button key={color} disabled={disabled} type="button"
+      className={'family-color-swatch' + (safeColor(value) === color ? ' active' : '')}
+      style={{ backgroundColor: color }} onClick={() => onChange(color)}
+      aria-label={'Elegir color ' + color} title={color} />)}
+    <label className="family-color-custom" title="Elegir otro color"><span>+</span>
+      <input type="color" aria-label="Color personalizado" disabled={disabled}
+        value={safeColor(value)} onChange={e => onChange(e.target.value)}/>
+    </label>
+  </div>;
 }
 
 function AppLanding({ onLogin, onJoin, email, setEmail, password, setPassword, code, setCode, busy, error }) {
@@ -102,6 +144,16 @@ export default function FamilyApp() {
   const [connected, setConnected] = useState(false);
   const [members, setMembers] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [selectedMark, setSelectedMark] = useState(null);
+  const [activeCatalog, setActiveCatalog] = useState('figures');
+  const [newAnnotationText, setNewAnnotationText] = useState('Texto');
+  const [annotationTextDraft, setAnnotationTextDraft] = useState('');
+  const [newAnnotationSize, setNewAnnotationSize] = useState('mediano');
+  const [newAnnotationColor, setNewAnnotationColor] = useState(MARK_COLORS[0]);
+  const [newBold, setNewBold] = useState(false);
+  const [newItalic, setNewItalic] = useState(false);
+  const [newUnderline, setNewUnderline] = useState(false);
+  const [markDraft, setMarkDraft] = useState(null);
   const [share, setShare] = useState(false);
   const [remotePointer, setRemotePointer] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -112,6 +164,7 @@ export default function FamilyApp() {
   const current = useRef(board);
   const channel = useRef(null);
   const drag = useRef(null);
+  const markDrag = useRef(null);
   const cooldown = useRef(0);
   const pointerTimer = useRef(null);
   const updating = useRef(false);
@@ -130,16 +183,19 @@ export default function FamilyApp() {
   const canEdit = therapist || !board.locked;
   const view = board.activeView || 'actual';
   const placed = board.figures?.[view] || [];
+  const marks = board.annotations?.[view] || [];
+  const chosenMark = marks.find(mark => mark.uid === selectedMark);
   const selectedFigure = placed.find(f => f.uid === selected);
   const available = TEMPLATES.filter(t => (filterSize === 'todos' || t.size === filterSize) && !placed.some(f => f.templateId === t.id));
   const accessCode = session?.access_code || session?.code || session?.patient_code || '';
   const patientLink = accessCode ? ESCULTURA_URL + '?code=' + encodeURIComponent(accessCode) : '';
+  useEffect(() => { setAnnotationTextDraft(chosenMark?.text || ''); }, [selectedMark, view]);
 
   function load(row, nextRole) {
     const next = row.board?.kind === 'family-sculpture' ? row.board : freshBoard();
     current.current = next;
     lastRevision.current = Number(next._sync?.version || 0);
-    setBoard(next); setSession(row); setRole(nextRole); setSelected(null); setHistory([]); setError('');
+    setBoard(next); setSession(row); setRole(nextRole); setSelected(null); setSelectedMark(null); setHistory([]); setError('');
   }
   async function login(e) {
     e.preventDefault(); if (!db) return;
@@ -181,7 +237,7 @@ export default function FamilyApp() {
       if (r.error) { setError(r.error.message); return; }
     }
     await db.auth.signOut();
-    setSession(null); setRole(''); setBoard(freshBoard()); setHistory([]); setRemotePointer(null); setRemoteDraft(null); lastRevision.current = 0;
+    setSession(null); setRole(''); setBoard(freshBoard()); setHistory([]); setRemotePointer(null); setRemoteDraft(null); setSelectedMark(null); lastRevision.current = 0;
   }
 
   // Broadcast permite sincronizar aunque cope_sessions no esté en la publicación
@@ -323,20 +379,89 @@ export default function FamilyApp() {
     if (!canEdit) return Promise.resolve(false);
     return updateFigures(arr => arr.some(f => f.uid === id) ? arr.map(f => f.uid === id ? { ...f, ...props } : f) : null);
   }
+
+  const updateAnnotations = transform => commit(state => {
+    const page = state.activeView;
+    const list = state.annotations?.[page] || [];
+    const next = transform(list);
+    return next ? { ...state, annotations: { ...(state.annotations || {actual:[], deseada:[]}), [page]: next } } : null;
+  });
+  async function addAnnotation(type) {
+    if (!canEdit || marks.length >= 35) return;
+    const uid = crypto.randomUUID();
+    const item = {
+      uid, type,
+      text: type === 'text' ? (cleanAnnotationText(newAnnotationText) || 'Texto') : '',
+      x: 30 + marks.length % 5 * 9,
+      y: 27 + marks.length % 4 * 12,
+      rotation: 0, scale: 1, color: newAnnotationColor,
+      size: newAnnotationSize, bold: newBold, italic: newItalic, underline: newUnderline
+    };
+    const ok = await updateAnnotations(list => [...list, item]);
+    if (ok) { setSelected(null); setSelectedMark(uid); }
+  }
+  function editAnnotation(uid, props) {
+    if (!canEdit) return Promise.resolve(false);
+    return updateAnnotations(list => list.some(mark => mark.uid === uid)
+      ? list.map(mark => mark.uid === uid ? { ...mark, ...props } : mark) : null);
+  }
+  function startMarkDrag(e, mark) {
+    if (!canEdit || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    setSelected(null); setSelectedMark(mark.uid);
+    const rect = boardElement.current.getBoundingClientRect();
+    markDrag.current = {uid:mark.uid,startX:e.clientX,startY:e.clientY,
+      x:mark.x,y:mark.y,width:rect.width,height:rect.height};
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function moveMarkDrag(e) {
+    reportPointer(e);
+    const d=markDrag.current;
+    if (!d || !canEdit) return;
+    const next = {uid:d.uid,
+      x:clamp(d.x+(e.clientX-d.startX)*100/d.width,5,95),
+      y:clamp(d.y+(e.clientY-d.startY)*100/d.height,7,93)};
+    setMarkDraft(next);
+    if (connected && performance.now()-dragCooldown.current > 45) {
+      dragCooldown.current=performance.now();
+      channel.current?.send({type:'broadcast',event:'figure_move',
+        payload:{from:clientId.current,view:current.current.activeView,...next}});
+    }
+  }
+  async function stopMarkDrag(e) {
+    const d=markDrag.current;
+    markDrag.current=null;
+    if(!d)return;
+    const next={x:clamp(d.x+(e.clientX-d.startX)*100/d.width,5,95),
+      y:clamp(d.y+(e.clientY-d.startY)*100/d.height,7,93)};
+    setMarkDraft(null);
+    if(Math.abs(next.x-d.x)+Math.abs(next.y-d.y)>.2) await editAnnotation(d.uid,next);
+    channel.current?.send({type:'broadcast',event:'figure_drop',
+      payload:{from:clientId.current,uid:d.uid}});
+  }
+
   function changeView(next) {
     if (!canEdit || next === view) return;
-    setSelected(null); setRemotePointer(null);
+    setSelected(null); setSelectedMark(null); setRemotePointer(null);
     commit(s => ({ ...s, activeView: next }), false);
   }
   function copyToDesired() {
     if (!canEdit) return;
-    if ((current.current.figures?.deseada || []).length && !window.confirm('¿Sustituir la composición deseada por la actual?')) return;
-    setSelected(null);
-    commit(s => ({ ...s, activeView: 'deseada', figures: { ...s.figures, deseada: s.figures.actual.map(f => ({ ...f })) } }));
+    if (((current.current.figures?.deseada || []).length || (current.current.annotations?.deseada || []).length)
+      && !window.confirm('¿Sustituir la composición deseada por la actual?')) return;
+    setSelected(null); setSelectedMark(null);
+    commit(s => ({ ...s, activeView: 'deseada',
+      figures: { ...s.figures, deseada: (s.figures.actual || []).map(f => ({ ...f })) },
+      annotations: { ...(s.annotations || {}), deseada: (s.annotations?.actual || []).map(a => ({ ...a })) }
+    }));
   }
   function resetScene() {
     if (!canEdit || !window.confirm('¿Vaciar la composición de esta vista?')) return;
-    setSelected(null); updateFigures(() => []);
+    setSelected(null); setSelectedMark(null);
+    commit(s => ({ ...s,
+      figures: { ...s.figures, [s.activeView]: [] },
+      annotations: { ...(s.annotations || {}), [s.activeView]: [] }
+    }));
   }
   function undo() {
     if (!canEdit || !history.length) return;
@@ -363,7 +488,7 @@ export default function FamilyApp() {
   function startDrag(e, figure) {
     if (!canEdit || e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
-    setSelected(figure.uid);
+    setSelected(figure.uid); setSelectedMark(null);
     const rect = boardElement.current.getBoundingClientRect();
     drag.current = { uid: figure.uid, startX: e.clientX, startY: e.clientY, x: figure.x, y: figure.y, width: rect.width, height: rect.height };
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -388,18 +513,95 @@ export default function FamilyApp() {
     if (Math.abs(next.x - d.x) + Math.abs(next.y - d.y) > .2) await editFigure(d.uid, next);
     channel.current?.send({ type: 'broadcast', event: 'figure_drop', payload: { from: clientId.current, uid: d.uid } });
   }
-  function exportScene() {
-    const items = placed.map(f => {
-      const t = templateOf(f.templateId);
-      const w = SCALE[t.size], cx = 40 + f.x * 11.2, cy = 84 + f.y * 6.65;
-      const k = w / 80;
-      return `<g transform="translate(${(cx - 40*k).toFixed(2)} ${(cy - 57*k).toFixed(2)}) scale(${k})"><ellipse cx="40" cy="107" rx="28" ry="5" fill="#dde4df"/><path d="M21 55 C25 49 33 47 40 47 C47 47 55 49 59 55 C66 66 69 86 68 103 Q40 111 12 103 C11 86 14 66 21 55Z" fill="${t.color}"/><ellipse cx="40" cy="27" rx="23" ry="24" fill="${t.color}"/><circle cx="32" cy="28" r="2" fill="#36443d"/><circle cx="48" cy="28" r="2" fill="#36443d"/><path d="M34 37 Q40 40.5 46 37" stroke="#36443d" stroke-width="2" fill="none"/></g><text x="${cx}" y="${cy+57*k+22}" font-size="17" fill="#31463c" text-anchor="middle" font-family="sans-serif">${xml(f.label)}</text>`;
+  // Genera un documento vectorial con muñecos y anotaciones; se usa también para JPG/PNG.
+  function makeSceneSVG() {
+    const figures = placed.map(f => {
+      const template = templateOf(f.templateId);
+      const cx = 40 + f.x * 11.2;
+      const cy = 84 + f.y * 6.65;
+      const scale = SCALE[template.size] / 80;
+      const tx = (cx - 40 * scale).toFixed(2);
+      const ty = (cy - 57 * scale).toFixed(2);
+      let face = '<circle cx="32" cy="28" r="2" fill="#36443d"/><circle cx="48" cy="28" r="2" fill="#36443d"/>' +
+        '<path d="M34 37 Q40 40.5 46 37" stroke="#36443d" stroke-width="2.3" stroke-linecap="round" fill="none"/>';
+      if (f.direction === 'izquierda') face = '<circle cx="30" cy="29" r="2.2" fill="#36443d"/><path d="M19 31 L14 35 L20 37" fill="' + template.color + '" stroke="#47584c" stroke-width="1.4"/>';
+      if (f.direction === 'derecha') face = '<circle cx="50" cy="29" r="2.2" fill="#36443d"/><path d="M61 31 L66 35 L60 37" fill="' + template.color + '" stroke="#47584c" stroke-width="1.4"/>';
+      return '<g transform="translate(' + tx + ' ' + ty + ') scale(' + scale + ')">' +
+        '<ellipse cx="40" cy="107" rx="28" ry="5" fill="#dce6df"/>' +
+        '<path d="M21 55 C25 49 33 47 40 47 C47 47 55 49 59 55 C66 66 69 86 68 103 Q40 111 12 103 C11 86 14 66 21 55Z" fill="' + template.color + '"/>' +
+        '<ellipse cx="40" cy="27" rx="23" ry="24" fill="' + template.color + '"/>' + face + '</g>' +
+        '<text x="' + cx.toFixed(2) + '" y="' + (cy + 57 * scale + 13).toFixed(2) + '" font-size="14" font-family="Arial, sans-serif" font-weight="700" fill="#31463c" text-anchor="middle">' + xml(f.label || 'Sin nombre') + '</text>';
     }).join('');
-    const title = VIEWS.find(v => v.id === view)?.label || 'Escultura familiar';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800"><rect width="1200" height="800" fill="#fbfaf5"/><text x="55" y="55" fill="#283e32" font-size="31" font-family="sans-serif">Escultura familiar · ${xml(title)}</text><rect x="40" y="84" width="1120" height="665" rx="24" fill="#fff" stroke="#d9e3d9" stroke-width="2"/>${items}</svg>`;
-    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-    const a = document.createElement('a'); a.href = url; a.download = `escultura-${view}.svg`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1200);
+    const notes = marks.map(mark => {
+      const color = safeColor(mark.color);
+      const x = (40 + Number(mark.x) * 11.2).toFixed(2);
+      const y = (84 + Number(mark.y) * 6.65).toFixed(2);
+      const deg = clamp(Number(mark.rotation) || 0, -360, 360);
+      const scale = clamp(Number(mark.scale) || 1, .5, 2.8);
+      const open = '<g transform="translate(' + x + ' ' + y + ') rotate(' + deg + ') scale(' + scale + ')">';
+      if (mark.type === 'circle') return open + '<circle r="39" fill="' + color + '" fill-opacity=".14" stroke="' + color + '" stroke-width="5"/></g>';
+      if (mark.type === 'square') return open + '<rect x="-38" y="-38" width="76" height="76" rx="2" fill="' + color + '" fill-opacity=".14" stroke="' + color + '" stroke-width="5"/></g>';
+      if (mark.type === 'arrow') return open +
+        '<path d="M-45 0 H35" stroke="' + color + '" stroke-width="7" stroke-linecap="round"/>' +
+        '<path d="M14 -21 L36 0 L14 21" stroke="' + color + '" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>';
+      if (mark.type === 'text') {
+        const size = MARK_FONTS[mark.size] || 25;
+        const lines = cleanAnnotationText(mark.text || 'Texto').split('\n');
+        const spans = lines.map((line, index) => '<tspan x="0" dy="' + (index === 0 ? '0' : (size * 1.2).toFixed(1)) + '">' + xml(line) + '</tspan>').join('');
+        const yOffset = -(lines.length - 1) * size * .6;
+        return open + '<text x="0" y="' + yOffset + '" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="' + size +
+          '" font-weight="' + (mark.bold ? '750' : '400') + '" font-style="' + (mark.italic ? 'italic' : 'normal') +
+          '" text-decoration="' + (mark.underline ? 'underline' : 'none') + '" fill="' + color + '">' + spans + '</text></g>';
+      }
+      return '';
+    }).join('');
+    const title = VIEWS.find(item => item.id === view)?.label || 'Escultura familiar';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">' +
+      '<rect width="1200" height="800" fill="#fafaf6"/>' +
+      '<text x="55" y="55" fill="#283e32" font-size="31" font-family="Arial, sans-serif">Escultura familiar · ' + xml(title) + '</text>' +
+      '<rect x="40" y="84" width="1120" height="665" rx="24" fill="#ffffff" stroke="#d9e3d9" stroke-width="2"/>' +
+      figures + notes + '</svg>';
+  }
+  function saveDownload(blob, ext) {
+    const url = URL.createObjectURL(blob);
+    const element = document.createElement('a');
+    element.href = url;
+    element.download = 'escultura-' + view + '.' + ext;
+    document.body.appendChild(element);
+    element.click();
+    element.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2500);
+  }
+  function exportScene(format = 'svg') {
+    if (!placed.length && !marks.length) return;
+    const svg = makeSceneSVG();
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    if (format === 'svg') { saveDownload(blob, 'svg'); return; }
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1800;
+        canvas.height = 1200;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Tu navegador no permite generar la imagen.');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const mime = format === 'jpg' ? 'image/jpeg' : 'image/png';
+        canvas.toBlob(file => {
+          if (file) saveDownload(file, format);
+          else setError('No se ha podido preparar la imagen ' + format.toUpperCase() + '.');
+        }, mime, .94);
+      } catch (error) { setError(error.message || 'Error al exportar la imagen.'); }
+      finally { URL.revokeObjectURL(url); }
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      setError('No se ha podido convertir la composición. Prueba con SVG.');
+    };
+    image.src = url;
   }
   useEffect(() => {
     const move = e => {
@@ -428,31 +630,125 @@ export default function FamilyApp() {
     {error && <div className="family-alert" role="alert">{error}<button onClick={() => setError('')} aria-label="Cerrar">×</button></div>}
     <div className="family-layout">
       <aside className="family-sidebar">
-        <div className="family-section-top"><span className="family-card-eyebrow">CATÁLOGO DE FIGURAS</span><h2>Elige los muñecos</h2><p>Escoge una figura para cada persona y colócala en el espacio. El color y el tamaño están predeterminados.</p></div>
-        <div className="family-filters">{[['todos','Todos'],['pequeno','Pequeños'],['mediano','Medianos'],['grande','Grandes']].map(([v,name])=><button key={v} className={filterSize === v ? 'active' : ''} onClick={() => setFilterSize(v)}>{name}</button>)}</div>
-        <div className="family-catalog">{available.map(t => <button key={t.id} disabled={!canEdit} className="family-catalog-figure" title={'Añadir figura ' + t.id} onClick={() => addFigure(t.id)}><Figure template={t} scale={.59} preview/><span>{labelSize(t.size)}</span></button>)}{!available.length && <p className="family-empty-catalog">Todas las figuras de esta categoría están en la composición.</p>}</div>
-        <p className="family-sidebar-note">Los colores no representan emociones ni tienen un significado asignado.</p>
+        <div className="family-tool-tabs" role="tablist" aria-label="Herramientas">
+          <button type="button" className={activeCatalog === 'figures' ? 'active' : ''} role="tab" aria-selected={activeCatalog === 'figures'} onClick={() => setActiveCatalog('figures')}>Muñecos</button>
+          <button type="button" className={activeCatalog === 'notes' ? 'active' : ''} role="tab" aria-selected={activeCatalog === 'notes'} onClick={() => setActiveCatalog('notes')}>Texto y formas</button>
+        </div>
+        {activeCatalog === 'figures' ? <>
+          <div className="family-section-top"><span className="family-card-eyebrow">CATÁLOGO DE FIGURAS</span><h2>Elige los muñecos</h2><p>Escoge una figura para cada persona y colócala en el espacio. El color y el tamaño están predeterminados.</p></div>
+          <div className="family-filters">{[['todos','Todos'],['pequeno','Pequeños'],['mediano','Medianos'],['grande','Grandes']].map(([v,name])=><button key={v} className={filterSize === v ? 'active' : ''} onClick={() => setFilterSize(v)}>{name}</button>)}</div>
+          <div className="family-catalog">{available.map(t => <button key={t.id} disabled={!canEdit} className="family-catalog-figure" title={'Añadir figura ' + t.id} onClick={() => addFigure(t.id)}><Figure template={t} scale={.59} preview/><span>{labelSize(t.size)}</span></button>)}{!available.length && <p className="family-empty-catalog">Todas las figuras de esta categoría están en la composición.</p>}</div>
+          <p className="family-sidebar-note">Los colores no representan emociones ni tienen un significado asignado.</p>
+        </> : <div className="family-annotation-tools">
+          <div className="family-section-top"><span className="family-card-eyebrow">ANOTACIONES</span><h2>Texto y formas</h2><p>Añade símbolos o palabras para organizar y señalar relaciones. Podrás girarlos, moverlos y cambiar su tamaño.</p></div>
+          <label className="family-note-label">Escribe el texto
+            <textarea rows="2" value={newAnnotationText} maxLength="100" disabled={!canEdit} onChange={e => setNewAnnotationText(cleanAnnotationText(e.target.value))} placeholder="Escribe aquí..."/>
+          </label>
+          <div className="family-text-settings">
+            <div className="family-format-buttons" aria-label="Formato del texto">
+              <button type="button" title="Negrita" aria-label="Negrita" aria-pressed={newBold} className={newBold?'active':''} disabled={!canEdit} onClick={() => setNewBold(x => !x)}><strong>N</strong></button>
+              <button type="button" title="Cursiva" aria-label="Cursiva" aria-pressed={newItalic} className={newItalic?'active':''} disabled={!canEdit} onClick={() => setNewItalic(x => !x)}><em>K</em></button>
+              <button type="button" title="Subrayado" aria-label="Subrayado" aria-pressed={newUnderline} className={newUnderline?'active':''} disabled={!canEdit} onClick={() => setNewUnderline(x => !x)}><u>S</u></button>
+            </div>
+            <select aria-label="Tamaño de letra" value={newAnnotationSize} disabled={!canEdit} onChange={e=>setNewAnnotationSize(e.target.value)}>
+              <option value="pequeno">Pequeño</option><option value="mediano">Mediano</option><option value="grande">Grande</option>
+            </select>
+          </div>
+          <span className="family-note-label">Color</span>
+          <ColorPicker value={newAnnotationColor} onChange={setNewAnnotationColor} disabled={!canEdit}/>
+          <button className="family-button primary family-add-note" type="button" disabled={!canEdit || marks.length >= 35} onClick={() => addAnnotation('text')}>+ Añadir texto</button>
+          <div className="family-shapes-divider"/>
+          <span className="family-note-label">Añadir una forma</span>
+          <div className="family-shape-buttons">
+            <button type="button" disabled={!canEdit || marks.length >= 35} onClick={() => addAnnotation('circle')}><span>◯</span>Círculo</button>
+            <button type="button" disabled={!canEdit || marks.length >= 35} onClick={() => addAnnotation('square')}><span>□</span>Cuadrado</button>
+            <button type="button" disabled={!canEdit || marks.length >= 35} onClick={() => addAnnotation('arrow')}><span>➜</span>Flecha</button>
+          </div>
+          <p className="family-sidebar-note">Selecciona una anotación del tablero para cambiar su color, giro, escala y formato. Se sincroniza con la otra vista.</p>
+        </div>}
         {therapist && <div className="family-therapist-controls"><span className="family-card-eyebrow">HERRAMIENTAS DEL PSICÓLOGO</span><button className="family-button outline" onClick={() => commit(s => ({ ...s, locked: !s.locked }), false)}>{board.locked ? 'Permitir mover al paciente' : 'Bloquear movimientos del paciente'}</button><button className="family-text-button" onClick={() => setHintOpen(v => !v)}>{hintOpen ? 'Ocultar guía clínica' : 'Ver guía clínica'} ▾</button>{hintOpen && <div className="family-guide"><strong>Exploración sistémica</strong><p>Invita a situar las figuras atendiendo a la cercanía, la dirección de la mirada, el tamaño y las personas ausentes.</p><p>Pregunta: «¿Quién está más cerca de ti?», «¿Qué cambiarías?» o «¿Cómo sería para ti una distancia cómoda?».</p><p>Los significados se exploran con el paciente; no se deducen de la figura elegida.</p></div>}</div>}
         {!therapist && <div className="family-patient-note"><strong>Tu espacio</strong><p>Puedes mover las figuras y cambiar cómo se relacionan entre sí. No hay respuestas correctas.</p>{board.locked && <p>Tu psicólogo ha pausado los cambios de la composición.</p>}</div>}
       </aside>
       <main className="family-workspace">
         <div className="family-stage-head"><div><span className="family-card-eyebrow">ESCULTURA FAMILIAR · COMPOSICIÓN COMPARTIDA</span><h1>Ubica a las personas de tu familia</h1><p>La distancia, el lugar y hacia dónde miran quedan a tu elección.</p></div><button className="family-button subtle" onClick={() => { const root = document.documentElement; if (document.fullscreenElement) document.exitFullscreen?.(); else root.requestFullscreen?.(); }}>⛶ Pantalla completa</button></div>
         <div className="family-tabs" role="tablist" aria-label="Vista de la escultura">{VIEWS.map(v => <button key={v.id} role="tab" aria-selected={view === v.id} className={view === v.id ? 'active' : ''} onClick={() => changeView(v.id)} disabled={!canEdit}>{v.label}</button>)}</div>
-        <div className="family-board" ref={boardElement} onPointerMove={reportPointer} onPointerLeave={hidePointer} onPointerDown={e => { if (e.target === e.currentTarget) { setSelected(null); reportPointer(e, true); } }}>
-          {!placed.length && <div className="family-empty"><span aria-hidden="true">◌</span><strong>Este espacio es tuyo</strong><p>Selecciona un muñeco del catálogo para empezar.</p></div>}
+        <div className="family-board" ref={boardElement} onPointerMove={reportPointer} onPointerLeave={hidePointer} onPointerDown={e => { if (e.target === e.currentTarget) { setSelected(null); setSelectedMark(null); reportPointer(e, true); } }}>
+          {!placed.length && !marks.length && <div className="family-empty"><span aria-hidden="true">◌</span><strong>Este espacio es tuyo</strong><p>Selecciona un muñeco del catálogo para empezar.</p></div>}
           {placed.map(f => {
             const t = templateOf(f.templateId); const pos = draft?.uid === f.uid ? draft : remoteDraft?.uid === f.uid && remoteDraft?.view === view ? remoteDraft : f;
-            return <button key={f.uid} type="button" aria-label={f.label + '. Arrastra para mover'} className={'family-placed' + (selected === f.uid ? ' selected' : '')} style={{ left: pos.x + '%', top: pos.y + '%' }} onPointerDown={e => startDrag(e, f)} onPointerMove={dragMove} onPointerUp={endDrag} onPointerCancel={() => { drag.current = null; setDraft(null); }} onClick={e => { e.stopPropagation(); setSelected(f.uid); }}>
+            return <button key={f.uid} type="button" aria-label={f.label + '. Arrastra para mover'} className={'family-placed' + (selected === f.uid ? ' selected' : '')} style={{ left: pos.x + '%', top: pos.y + '%' }} onPointerDown={e => startDrag(e, f)} onPointerMove={dragMove} onPointerUp={endDrag} onPointerCancel={() => { drag.current = null; setDraft(null); }} onClick={e => { e.stopPropagation(); setSelected(f.uid); setSelectedMark(null); }}>
               <Figure template={t} direction={f.direction || 'frente'}/><span className="family-placed-name">{f.label || 'Sin nombre'}</span>
             </button>;
           })}
+          {marks.map(mark => {
+            const pos = markDraft?.uid === mark.uid ? markDraft :
+              remoteDraft?.uid === mark.uid && remoteDraft?.view === view ? remoteDraft : mark;
+            return <button type="button" key={mark.uid} aria-label={(MARK_LABELS[mark.type] || 'Anotación') + '. Arrastra para mover'}
+              className={'family-mark' + (selectedMark === mark.uid ? ' selected' : '')}
+              style={{left:pos.x+'%',top:pos.y+'%',
+                transform:'translate(-50%, -50%) rotate(' + (mark.rotation || 0) + 'deg) scale(' + (mark.scale || 1) + ')'}}
+              onPointerDown={e => startMarkDrag(e,mark)} onPointerMove={moveMarkDrag}
+              onPointerUp={stopMarkDrag} onPointerCancel={() => { markDrag.current=null; setMarkDraft(null); }}
+              onClick={e => { e.stopPropagation(); setSelectedMark(mark.uid); setSelected(null); }}>
+              <MarkVisual mark={mark}/>
+            </button>;
+          })}
           {remotePointer && remotePointer.view === view && <div className="family-remote" style={{ left: remotePointer.x + '%', top: remotePointer.y + '%' }}><svg width="25" height="28" viewBox="0 0 25 28" aria-hidden="true"><path d="M3 2 V22 L9 17 L13 26 L18 24 L14 15 L23 15 Z" fill={remotePointer.role === 'patient' ? '#B26F67' : '#315846'} stroke="white" strokeWidth="1.7" strokeLinejoin="round"/></svg><span>{remotePointer.role === 'patient' ? 'Paciente' : 'Psicólogo'}</span>{remotePointer.ping && <span className="family-ping"/>}</div>}
-          <div className="family-board-foot">{placed.length} {placed.length === 1 ? 'figura' : 'figuras'} · {view === 'actual' ? 'Situación actual' : 'Situación deseada'}</div>
+          <div className="family-board-foot">{placed.length} {placed.length === 1 ? 'figura' : 'figuras'} · {marks.length} {marks.length === 1 ? 'anotación' : 'anotaciones'} · {view === 'actual' ? 'Situación actual' : 'Situación deseada'}</div>
         </div>
         <div className="family-toolbar">
-          {selectedFigure ? <><span className="family-toolbar-title">Figura seleccionada</span><label className="family-name-label">Representa a <input disabled={!canEdit} value={selectedFigure.label} maxLength="35" onChange={e => { const value = cleanText(e.target.value); current.current = { ...current.current, figures: { ...current.current.figures, [view]: (current.current.figures[view] || []).map(f => f.uid === selected ? { ...f, label: value } : f) } }; setBoard(current.current); }} onBlur={e => editFigure(selectedFigure.uid, { label: cleanText(e.target.value) || 'Sin nombre' })} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}/></label><span className="family-toolbar-title">Mira hacia</span>{[['izquierda','Izquierda'],['frente','Frente'],['derecha','Derecha']].map(([id,label])=><button key={id} className={'family-chip' + (selectedFigure.direction === id ? ' active' : '')} disabled={!canEdit} onClick={() => editFigure(selected, { direction: id })}>{label}</button>)}<button className="family-chip danger" disabled={!canEdit} onClick={() => { updateFigures(arr => arr.filter(f => f.uid !== selected)); setSelected(null); }}>Quitar</button></> : <span className="family-hint">Arrastra las figuras para moverlas. Usa el ratón para señalar: la otra persona verá tu cursor.</span>}
+          {chosenMark ? <div className="family-mark-editor">
+            <div className="family-mark-editor-header"><strong>{MARK_LABELS[chosenMark.type] || 'Anotación'} seleccionado</strong>
+              <button className="family-chip danger" disabled={!canEdit} type="button"
+                onClick={() => { updateAnnotations(list => list.filter(m => m.uid !== chosenMark.uid)); setSelectedMark(null); }}>Eliminar</button>
+            </div>
+            {chosenMark.type === 'text' && <div className="family-mark-editor-row">
+              <label className="family-note-label">Texto
+                <textarea className="family-edit-mark-text" disabled={!canEdit} rows="2" maxLength="100"
+                  value={annotationTextDraft}
+                  onChange={e => setAnnotationTextDraft(cleanAnnotationText(e.target.value))}
+                  onBlur={() => { if (annotationTextDraft !== chosenMark.text) editAnnotation(chosenMark.uid,{text:cleanAnnotationText(annotationTextDraft)||'Texto'}); }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) {e.preventDefault();e.currentTarget.blur();} }}/>
+              </label>
+              <div className="family-format-buttons" aria-label="Formato del texto seleccionado">
+                <button type="button" title="Negrita" aria-pressed={!!chosenMark.bold} disabled={!canEdit}
+                  className={chosenMark.bold?'active':''} onClick={() => editAnnotation(chosenMark.uid,{bold:!chosenMark.bold})}><strong>N</strong></button>
+                <button type="button" title="Cursiva" aria-pressed={!!chosenMark.italic} disabled={!canEdit}
+                  className={chosenMark.italic?'active':''} onClick={() => editAnnotation(chosenMark.uid,{italic:!chosenMark.italic})}><em>K</em></button>
+                <button type="button" title="Subrayado" aria-pressed={!!chosenMark.underline} disabled={!canEdit}
+                  className={chosenMark.underline?'active':''} onClick={() => editAnnotation(chosenMark.uid,{underline:!chosenMark.underline})}><u>S</u></button>
+              </div>
+              <label className="family-editor-field">Tamaño
+                <select disabled={!canEdit} value={chosenMark.size || 'mediano'}
+                  onChange={e => editAnnotation(chosenMark.uid,{size:e.target.value})}>
+                  <option value="pequeno">Pequeño</option><option value="mediano">Mediano</option><option value="grande">Grande</option>
+                </select>
+              </label>
+            </div>}
+            <div className="family-mark-editor-row">
+              <span className="family-toolbar-title">Color</span>
+              <ColorPicker value={chosenMark.color} disabled={!canEdit} onChange={color => editAnnotation(chosenMark.uid,{color})}/>
+              <span className="family-toolbar-title">Girar</span>
+              <button className="family-chip" disabled={!canEdit} title="Girar 15° a la izquierda" onClick={() => editAnnotation(chosenMark.uid,{rotation:(chosenMark.rotation||0)-15})}>↶ 15°</button>
+              <button className="family-chip" disabled={!canEdit} title="Girar 15° a la derecha" onClick={() => editAnnotation(chosenMark.uid,{rotation:(chosenMark.rotation||0)+15})}>↷ 15°</button>
+              <span className="family-toolbar-title">Escala</span>
+              <button className="family-chip" disabled={!canEdit || (chosenMark.scale||1) <= .5} onClick={() => editAnnotation(chosenMark.uid,{scale:clamp(Math.round(((chosenMark.scale||1)-.15)*100)/100,.5,2.8)})}>−</button>
+              <span className="family-scale-value">{Math.round((chosenMark.scale||1)*100)}%</span>
+              <button className="family-chip" disabled={!canEdit || (chosenMark.scale||1) >= 2.8} onClick={() => editAnnotation(chosenMark.uid,{scale:clamp(Math.round(((chosenMark.scale||1)+.15)*100)/100,.5,2.8)})}>+</button>
+            </div>
+          </div> : selectedFigure ? <><span className="family-toolbar-title">Figura seleccionada</span><label className="family-name-label">Representa a <input disabled={!canEdit} value={selectedFigure.label} maxLength="35" onChange={e => { const value = cleanText(e.target.value); current.current = { ...current.current, figures: { ...current.current.figures, [view]: (current.current.figures[view] || []).map(f => f.uid === selected ? { ...f, label: value } : f) } }; setBoard(current.current); }} onBlur={e => editFigure(selectedFigure.uid, { label: cleanText(e.target.value) || 'Sin nombre' })} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}/></label><span className="family-toolbar-title">Mira hacia</span>{[['izquierda','Izquierda'],['frente','Frente'],['derecha','Derecha']].map(([id,label])=><button key={id} className={'family-chip' + (selectedFigure.direction === id ? ' active' : '')} disabled={!canEdit} onClick={() => editFigure(selected, { direction: id })}>{label}</button>)}<button className="family-chip danger" disabled={!canEdit} onClick={() => { updateFigures(arr => arr.filter(f => f.uid !== selected)); setSelected(null); }}>Quitar</button></> : <span className="family-hint">Arrastra las figuras para moverlas. Usa el ratón para señalar: la otra persona verá tu cursor.</span>}
+
         </div>
-        <div className="family-bottom-actions"><button className="family-button outline" disabled={!canEdit || !history.length} onClick={undo}>↶ Deshacer</button>{view === 'actual' && <button className="family-button outline" disabled={!canEdit || !placed.length} onClick={copyToDesired}>Copiar a «Cómo me gustaría que fuera»</button>}<button className="family-button outline" disabled={!canEdit || !placed.length} onClick={resetScene}>Vaciar esta vista</button>{therapist && <button className="family-button outline" onClick={exportScene} disabled={!placed.length}>Guardar imagen SVG</button>}</div>
+        <div className="family-bottom-actions">
+          <button className="family-button outline" disabled={!canEdit || !history.length} onClick={undo}>↶ Deshacer</button>
+          {view === 'actual' && <button className="family-button outline" disabled={!canEdit || (!placed.length && !marks.length)} onClick={copyToDesired}>Copiar a «Cómo me gustaría que fuera»</button>}
+          <button className="family-button outline" disabled={!canEdit || (!placed.length && !marks.length)} onClick={resetScene}>Vaciar esta vista</button>
+          {therapist && <div className="family-download-controls"><span>Descargar</span>
+            <button className="family-button outline" disabled={!placed.length && !marks.length} onClick={() => exportScene('svg')}>SVG</button>
+            <button className="family-button outline" disabled={!placed.length && !marks.length} onClick={() => exportScene('png')}>PNG</button>
+            <button className="family-button outline" disabled={!placed.length && !marks.length} onClick={() => exportScene('jpg')}>JPG</button>
+          </div>}
+        </div>
       </main>
     </div>
   </div>;
