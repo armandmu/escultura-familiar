@@ -87,8 +87,8 @@ function MarkVisual({ mark }) {
     textDecoration: mark.underline ? 'underline' : 'none'
   }}>{mark.text || 'Texto'}</span>;
   return <svg className="family-mark-graphic" viewBox="0 0 112 112" width="112" height="112" aria-hidden="true">
-    {mark.type === 'circle' && <circle cx="56" cy="56" r="39" fill={color} fillOpacity=".14" stroke={color} strokeWidth="5"/>}
-    {mark.type === 'square' && <rect x="18" y="18" width="76" height="76" rx="2" fill={color} fillOpacity=".14" stroke={color} strokeWidth="5"/>}
+    {mark.type === 'circle' && <circle cx="56" cy="56" r="39" fill="none" stroke={color} strokeWidth="5"/>}
+    {mark.type === 'square' && <rect x="18" y="18" width="76" height="76" rx="2" fill="none" stroke={color} strokeWidth="5"/>}
     {mark.type === 'arrow' && <>
       <path d="M11 56 H91" stroke={color} strokeWidth="7" strokeLinecap="round"/>
       <path d="M70 35 L92 56 L70 77" stroke={color} strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
@@ -154,6 +154,8 @@ export default function FamilyApp() {
   const [newItalic, setNewItalic] = useState(false);
   const [newUnderline, setNewUnderline] = useState(false);
   const [markDraft, setMarkDraft] = useState(null);
+  const [transformDraft, setTransformDraft] = useState(null);
+  const [remoteTransform, setRemoteTransform] = useState(null);
   const [share, setShare] = useState(false);
   const [remotePointer, setRemotePointer] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -165,6 +167,8 @@ export default function FamilyApp() {
   const channel = useRef(null);
   const drag = useRef(null);
   const markDrag = useRef(null);
+  const transformGesture = useRef(null);
+  const remoteTransformTimer = useRef(null);
   const cooldown = useRef(0);
   const pointerTimer = useRef(null);
   const updating = useRef(false);
@@ -178,6 +182,7 @@ export default function FamilyApp() {
   useEffect(() => () => {
     clearTimeout(pointerTimer.current);
     clearTimeout(remoteDragTimer.current);
+    clearTimeout(remoteTransformTimer.current);
   }, []);
   const therapist = role === 'therapist';
   const canEdit = therapist || !board.locked;
@@ -256,6 +261,7 @@ export default function FamilyApp() {
     current.current = next;
     setBoard(next);
     setRemoteDraft(null);
+    setRemoteTransform(null);
     setSelected(id => (next.figures?.[next.activeView] || []).some(f => f.uid === id) ? id : null);
   }
 
@@ -290,6 +296,18 @@ export default function FamilyApp() {
         clearTimeout(remoteDragTimer.current);
         setRemoteDraft(null);
       })
+      .on('broadcast', { event: 'annotation_transform' }, ({ payload }) => {
+        if (!active || !payload || payload.from === clientId.current || payload.view !== current.current.activeView) return;
+        if (typeof payload.uid !== 'string' || !Number.isFinite(payload.rotation) || !Number.isFinite(payload.scale)) return;
+        setRemoteTransform({uid:payload.uid,view:payload.view,rotation:payload.rotation,scale:payload.scale});
+        clearTimeout(remoteTransformTimer.current);
+        remoteTransformTimer.current = setTimeout(() => setRemoteTransform(null), 2500);
+      })
+      .on('broadcast', { event: 'annotation_transform_end' }, ({ payload }) => {
+        if (!active || payload?.from === clientId.current) return;
+        clearTimeout(remoteTransformTimer.current);
+        setRemoteTransform(null);
+      })
       .on('presence', { event: 'sync' }, () => {
         if (active) setMembers(Object.values(ch.presenceState()).flat().map(v => v.role));
       })
@@ -313,6 +331,7 @@ export default function FamilyApp() {
       active = false;
       if (channel.current === ch) channel.current = null;
       clearTimeout(remoteDragTimer.current);
+      clearTimeout(remoteTransformTimer.current);
       db.removeChannel(ch); setConnected(false); setMembers([]); setRemoteDraft(null);
     };
   }, [session?.id, role]);
@@ -440,6 +459,84 @@ export default function FamilyApp() {
       payload:{from:clientId.current,uid:d.uid}});
   }
 
+
+  function startTransformHandle(e, mark, mode) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!canEdit || e.button !== 0 || !boardElement.current) return;
+    setSelected(null);
+    setSelectedMark(mark.uid);
+    markDrag.current = null;
+    setMarkDraft(null);
+    const rect = boardElement.current.getBoundingClientRect();
+    const cx = rect.left + mark.x * rect.width / 100;
+    const cy = rect.top + mark.y * rect.height / 100;
+    const angle = Math.atan2(e.clientY - cy, e.clientX - cx) * 180 / Math.PI;
+    const distance = Math.max(16, Math.hypot(e.clientX - cx, e.clientY - cy));
+    transformGesture.current = {
+      uid:mark.uid, mode, view:current.current.activeView,
+      cx,cy,startAngle:angle,startDistance:distance,
+      originalRotation:Number(mark.rotation)||0, originalScale:Number(mark.scale)||1
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function transformedAtPointer(e, gesture) {
+    const angle = Math.atan2(e.clientY - gesture.cy, e.clientX - gesture.cx) * 180 / Math.PI;
+    const distance = Math.hypot(e.clientX - gesture.cx, e.clientY - gesture.cy);
+    if (gesture.mode === 'rotate') {
+      const delta = ((angle - gesture.startAngle + 540) % 360) - 180;
+      return { rotation:Math.round(gesture.originalRotation + delta), scale:gesture.originalScale };
+    }
+    return {
+      rotation:gesture.originalRotation,
+      scale:Math.round(clamp(gesture.originalScale * distance / gesture.startDistance, .45, 3.5) * 100) / 100
+    };
+  }
+  function moveTransformHandle(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    reportPointer(e);
+    const gesture = transformGesture.current;
+    if (!gesture || !canEdit) return;
+    const changes = transformedAtPointer(e,gesture);
+    setTransformDraft({uid:gesture.uid,...changes});
+    if (connected && performance.now() - dragCooldown.current > 45) {
+      dragCooldown.current = performance.now();
+      channel.current?.send({
+        type:'broadcast', event:'annotation_transform',
+        payload:{from:clientId.current,view:gesture.view,uid:gesture.uid,...changes}
+      });
+    }
+  }
+  async function stopTransformHandle(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const gesture = transformGesture.current;
+    transformGesture.current = null;
+    if (!gesture) return;
+    const changes = transformedAtPointer(e,gesture);
+    setTransformDraft(null);
+    if (Math.abs(changes.rotation - gesture.originalRotation) > .1 ||
+        Math.abs(changes.scale - gesture.originalScale) > .005) {
+      await editAnnotation(gesture.uid,changes);
+    }
+    channel.current?.send({
+      type:'broadcast', event:'annotation_transform_end',
+      payload:{from:clientId.current,uid:gesture.uid}
+    });
+  }
+  function cancelTransformHandle(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const gesture = transformGesture.current;
+    transformGesture.current = null;
+    setTransformDraft(null);
+    if (gesture) channel.current?.send({
+      type:'broadcast',event:'annotation_transform_end',
+      payload:{from:clientId.current,uid:gesture.uid}
+    });
+  }
+
   function changeView(next) {
     if (!canEdit || next === view) return;
     setSelected(null); setSelectedMark(null); setRemotePointer(null);
@@ -539,8 +636,8 @@ export default function FamilyApp() {
       const deg = clamp(Number(mark.rotation) || 0, -360, 360);
       const scale = clamp(Number(mark.scale) || 1, .5, 2.8);
       const open = '<g transform="translate(' + x + ' ' + y + ') rotate(' + deg + ') scale(' + scale + ')">';
-      if (mark.type === 'circle') return open + '<circle r="39" fill="' + color + '" fill-opacity=".14" stroke="' + color + '" stroke-width="5"/></g>';
-      if (mark.type === 'square') return open + '<rect x="-38" y="-38" width="76" height="76" rx="2" fill="' + color + '" fill-opacity=".14" stroke="' + color + '" stroke-width="5"/></g>';
+      if (mark.type === 'circle') return open + '<circle r="39" fill="none" stroke="' + color + '" stroke-width="5"/></g>';
+      if (mark.type === 'square') return open + '<rect x="-38" y="-38" width="76" height="76" rx="2" fill="none" stroke="' + color + '" stroke-width="5"/></g>';
       if (mark.type === 'arrow') return open +
         '<path d="M-45 0 H35" stroke="' + color + '" stroke-width="7" stroke-linecap="round"/>' +
         '<path d="M14 -21 L36 0 L14 21" stroke="' + color + '" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>';
@@ -683,15 +780,33 @@ export default function FamilyApp() {
           {marks.map(mark => {
             const pos = markDraft?.uid === mark.uid ? markDraft :
               remoteDraft?.uid === mark.uid && remoteDraft?.view === view ? remoteDraft : mark;
-            return <button type="button" key={mark.uid} aria-label={(MARK_LABELS[mark.type] || 'Anotación') + '. Arrastra para mover'}
+            const live = transformDraft?.uid === mark.uid ? transformDraft :
+              remoteTransform?.uid === mark.uid && remoteTransform?.view === view ? remoteTransform : mark;
+            return <div key={mark.uid} role="button" tabIndex={0}
+              aria-label={(MARK_LABELS[mark.type] || 'Anotación') + '. Arrastra para mover. Selecciona para girar o redimensionar'}
               className={'family-mark' + (selectedMark === mark.uid ? ' selected' : '')}
               style={{left:pos.x+'%',top:pos.y+'%',
-                transform:'translate(-50%, -50%) rotate(' + (mark.rotation || 0) + 'deg) scale(' + (mark.scale || 1) + ')'}}
+                transform:'translate(-50%, -50%) rotate(' + (live.rotation || 0) + 'deg) scale(' + (live.scale || 1) + ')'}}
               onPointerDown={e => startMarkDrag(e,mark)} onPointerMove={moveMarkDrag}
               onPointerUp={stopMarkDrag} onPointerCancel={() => { markDrag.current=null; setMarkDraft(null); }}
+              onKeyDown={e => { if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelectedMark(mark.uid);setSelected(null);} }}
               onClick={e => { e.stopPropagation(); setSelectedMark(mark.uid); setSelected(null); }}>
               <MarkVisual mark={mark}/>
-            </button>;
+              {selectedMark === mark.uid && canEdit && <>
+                <button type="button" className="family-transform-handle rotate"
+                  title="Arrastra para girar con el ratón" aria-label="Girar anotación"
+                  onPointerDown={e => startTransformHandle(e,mark,'rotate')}
+                  onPointerMove={moveTransformHandle} onPointerUp={stopTransformHandle}
+                  onPointerCancel={cancelTransformHandle}
+                  onClick={e => e.stopPropagation()}>↻</button>
+                <button type="button" className="family-transform-handle resize"
+                  title="Arrastra para agrandar o reducir con el ratón" aria-label="Cambiar tamaño de anotación"
+                  onPointerDown={e => startTransformHandle(e,mark,'scale')}
+                  onPointerMove={moveTransformHandle} onPointerUp={stopTransformHandle}
+                  onPointerCancel={cancelTransformHandle}
+                  onClick={e => e.stopPropagation()}>⤡</button>
+              </>}
+            </div>;
           })}
           {remotePointer && remotePointer.view === view && <div className="family-remote" style={{ left: remotePointer.x + '%', top: remotePointer.y + '%' }}><svg width="25" height="28" viewBox="0 0 25 28" aria-hidden="true"><path d="M3 2 V22 L9 17 L13 26 L18 24 L14 15 L23 15 Z" fill={remotePointer.role === 'patient' ? '#B26F67' : '#315846'} stroke="white" strokeWidth="1.7" strokeLinejoin="round"/></svg><span>{remotePointer.role === 'patient' ? 'Paciente' : 'Psicólogo'}</span>{remotePointer.ping && <span className="family-ping"/>}</div>}
           <div className="family-board-foot">{placed.length} {placed.length === 1 ? 'figura' : 'figuras'} · {marks.length} {marks.length === 1 ? 'anotación' : 'anotaciones'} · {view === 'actual' ? 'Situación actual' : 'Situación deseada'}</div>

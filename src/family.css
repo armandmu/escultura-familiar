@@ -86,3 +86,27 @@
 .family-download-controls .family-button:not(:disabled):hover{background:#dcebdd}
 @media(max-width:900px){.family-download-controls{margin-left:0;padding-left:0}.family-toolbar{max-height:38dvh;overflow-y:auto}}
 @media(max-width:760px){.family-annotation-tools{gap:10px}.family-mark-editor-row .family-note-label{min-width:145px}.family-mark-graphic{width:76px;height:76px}.family-mark-content{max-width:180px}.family-download-controls{flex-wrap:wrap}}
+
+
+/* Panel lateral: evitar que las descripciones se solapen con los controles clínicos */
+.family-app .family-sidebar{overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
+.family-annotation-tools{flex:0 0 auto;min-height:max-content;overflow:visible;gap:12px}
+.family-annotation-tools>*{flex-shrink:0}
+.family-annotation-tools .family-sidebar-note{position:static;flex:0 0 auto;margin:12px 0 5px;line-height:1.55}
+.family-therapist-controls,.family-patient-note{flex:0 0 auto;position:relative;z-index:0;margin-top:20px;padding-top:17px;border-top:1px solid #e4eae1;background:#fff}
+.family-tool-tabs{flex-shrink:0}
+.family-mark,.family-mark:hover,.family-mark.selected{background:transparent}
+.family-mark.selected{outline:2px dashed #6c9b78;outline-offset:5px}
+.family-transform-handle{
+ position:absolute;display:grid;place-items:center;
+ width:25px;height:25px;min-width:25px;min-height:25px;
+ padding:0;border:2px solid #fff;border-radius:50%;
+ background:#315c45;color:white;font-size:18px;font-weight:700;line-height:1;
+ box-shadow:0 2px 10px #173c324d;cursor:grab;
+ touch-action:none;user-select:none;z-index:20;
+}
+.family-transform-handle:hover{background:#214a35}
+.family-transform-handle:active{cursor:grabbing}
+.family-transform-handle.rotate{top:-42px;left:50%;transform:translateX(-50%)}
+.family-transform-handle.resize{right:-17px;bottom:-17px;cursor:nwse-resize;font-size:19px}
+.family-mark:has(.family-transform-handle){z-index:12}
