@@ -4,7 +4,16 @@ import './family.css';
 
 const URL_SUPABASE = import.meta.env.VITE_SUPABASE_URL;
 const CLAVE_SUPABASE = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-const db = URL_SUPABASE && CLAVE_SUPABASE ? createClient(URL_SUPABASE, CLAVE_SUPABASE) : null;
+// Aislar la autenticación por pestaña: psicólogo y paciente pueden abrir la misma web en paralelo.
+const db = URL_SUPABASE && CLAVE_SUPABASE ? createClient(URL_SUPABASE, CLAVE_SUPABASE, {
+  auth: {
+    storage: window.sessionStorage,
+    storageKey: 'escultura-familiar-auth',
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false
+  }
+}) : null;
 const BASE = import.meta.env.BASE_URL;
 const LOGO = BASE + 'brand-angel-rull.svg';
 const ESCULTURA_URL = new URL(BASE, window.location.origin).href;
@@ -96,6 +105,7 @@ export default function FamilyApp() {
   const [share, setShare] = useState(false);
   const [remotePointer, setRemotePointer] = useState(null);
   const [draft, setDraft] = useState(null);
+  const [remoteDraft, setRemoteDraft] = useState(null);
   const [filterSize, setFilterSize] = useState('todos');
   const [hintOpen, setHintOpen] = useState(false);
   const [history, setHistory] = useState([]);
@@ -106,8 +116,16 @@ export default function FamilyApp() {
   const pointerTimer = useRef(null);
   const updating = useRef(false);
   const boardElement = useRef(null);
+  const clientId = useRef(crypto.randomUUID());
+  const lastRevision = useRef(0);
+  const incomingWhileSaving = useRef(null);
+  const dragCooldown = useRef(0);
+  const remoteDragTimer = useRef(null);
   useEffect(() => { current.current = board; }, [board]);
-  useEffect(() => () => clearTimeout(pointerTimer.current), []);
+  useEffect(() => () => {
+    clearTimeout(pointerTimer.current);
+    clearTimeout(remoteDragTimer.current);
+  }, []);
   const therapist = role === 'therapist';
   const canEdit = therapist || !board.locked;
   const view = board.activeView || 'actual';
@@ -120,6 +138,7 @@ export default function FamilyApp() {
   function load(row, nextRole) {
     const next = row.board?.kind === 'family-sculpture' ? row.board : freshBoard();
     current.current = next;
+    lastRevision.current = Number(next._sync?.version || 0);
     setBoard(next); setSession(row); setRole(nextRole); setSelected(null); setHistory([]); setError('');
   }
   async function login(e) {
@@ -162,7 +181,26 @@ export default function FamilyApp() {
       if (r.error) { setError(r.error.message); return; }
     }
     await db.auth.signOut();
-    setSession(null); setRole(''); setBoard(freshBoard()); setHistory([]); setRemotePointer(null);
+    setSession(null); setRole(''); setBoard(freshBoard()); setHistory([]); setRemotePointer(null); setRemoteDraft(null); lastRevision.current = 0;
+  }
+
+  // Broadcast permite sincronizar aunque cope_sessions no esté en la publicación
+  // postgres_changes de Supabase. La persistencia continúa pasando por RPC.
+  function receiveBoard(next) {
+    if (next?.kind !== 'family-sculpture') return;
+    const version = Number(next._sync?.version || 0);
+    if (version && version <= lastRevision.current) return;
+    if (!version && lastRevision.current) return;
+    if (updating.current) {
+      if (!incomingWhileSaving.current || version >= Number(incomingWhileSaving.current._sync?.version || 0)) incomingWhileSaving.current = next;
+      return;
+    }
+    if (!version && JSON.stringify(next) === JSON.stringify(current.current)) return;
+    lastRevision.current = version;
+    current.current = next;
+    setBoard(next);
+    setRemoteDraft(null);
+    setSelected(id => (next.figures?.[next.activeView] || []).some(f => f.uid === id) ? id : null);
   }
 
   useEffect(() => {
@@ -172,17 +210,35 @@ export default function FamilyApp() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cope_sessions', filter: 'id=eq.' + session.id }, p => {
         if (!active) return;
         if (p.eventType === 'DELETE') { setSession(null); setRole(''); return; }
-        if (p.new?.board?.kind === 'family-sculpture') {
-          current.current = p.new.board;
-          setBoard(p.new.board);
-          setSelected(id => (p.new.board.figures?.[p.new.board.activeView] || []).some(f => f.uid === id) ? id : null);
+        if (p.new?.board?.kind === 'family-sculpture') receiveBoard(p.new.board);
+      })
+      .on('broadcast', { event: 'board_snapshot' }, ({ payload }) => {
+        if (!active || !payload || payload.from === clientId.current) return;
+        receiveBoard(payload.board);
+      })
+      .on('broadcast', { event: 'board_request' }, ({ payload }) => {
+        if (!active || payload?.from === clientId.current) return;
+        if (current.current?.kind === 'family-sculpture') {
+          ch.send({ type: 'broadcast', event: 'board_snapshot', payload: { from: clientId.current, board: current.current } });
         }
+      })
+      .on('broadcast', { event: 'figure_move' }, ({ payload }) => {
+        if (!active || !payload || payload.from === clientId.current || payload.view !== current.current.activeView) return;
+        if (!Number.isFinite(payload.x) || !Number.isFinite(payload.y) || typeof payload.uid !== 'string') return;
+        setRemoteDraft({ uid: payload.uid, view: payload.view, x: payload.x, y: payload.y });
+        clearTimeout(remoteDragTimer.current);
+        remoteDragTimer.current = setTimeout(() => setRemoteDraft(null), 2300);
+      })
+      .on('broadcast', { event: 'figure_drop' }, ({ payload }) => {
+        if (!active || payload?.from === clientId.current) return;
+        clearTimeout(remoteDragTimer.current);
+        setRemoteDraft(null);
       })
       .on('presence', { event: 'sync' }, () => {
         if (active) setMembers(Object.values(ch.presenceState()).flat().map(v => v.role));
       })
       .on('broadcast', { event: 'pointer' }, ({ payload }) => {
-        if (!active || !payload || payload.role === role) return;
+        if (!active || !payload || payload.from === clientId.current) return;
         if (payload.hidden) { setRemotePointer(null); return; }
         setRemotePointer({ ...payload, at: Date.now() });
         clearTimeout(pointerTimer.current);
@@ -191,36 +247,63 @@ export default function FamilyApp() {
       .subscribe(async status => {
         if (!active) return;
         setConnected(status === 'SUBSCRIBED');
-        if (status === 'SUBSCRIBED') await ch.track({ role });
+        if (status === 'SUBSCRIBED') {
+          await ch.track({ role, clientId: clientId.current });
+          ch.send({ type: 'broadcast', event: 'board_request', payload: { from: clientId.current } });
+        }
       });
     channel.current = ch;
     return () => {
       active = false;
       if (channel.current === ch) channel.current = null;
-      db.removeChannel(ch); setConnected(false); setMembers([]);
+      clearTimeout(remoteDragTimer.current);
+      db.removeChannel(ch); setConnected(false); setMembers([]); setRemoteDraft(null);
     };
   }, [session?.id, role]);
 
   async function commit(transform, saveHistory = true) {
     if (!session || updating.current) return false;
     const before = current.current;
-    const after = transform(before);
-    if (!after || after === before) return false;
+    const transformed = transform(before);
+    if (!transformed || transformed === before) return false;
+    // Cada escritura tiene una versión creciente para descartar ecos y mensajes atrasados.
+    const after = { ...transformed, _sync: {
+      version: Math.max(Date.now(), lastRevision.current + 1),
+      from: clientId.current
+    } };
     updating.current = true;
     current.current = after;
+    lastRevision.current = after._sync.version;
     setBoard(after);
     try {
       const r = await db.rpc('cope_update_board', { p_id: session.id, p_board: after });
       if (r.error) throw r.error;
-      if (r.data?.kind === 'family-sculpture') {
-        current.current = r.data; setBoard(r.data);
-      }
+      const saved = r.data?.kind === 'family-sculpture' ? r.data : after;
+      current.current = saved;
+      setBoard(saved);
       if (saveHistory) setHistory(h => [...h.slice(-19), before]);
+      // Comunicación directa entre ambas vistas, independiente de la replicación SQL.
+      channel.current?.send({
+        type: 'broadcast', event: 'board_snapshot',
+        payload: { from: clientId.current, board: saved }
+      }).then(status => {
+        if (status !== 'ok') setError('No se ha podido enviar el cambio en directo. Comprueba la conexión de ambas vistas.');
+      }).catch(() => setError('La conexión en tiempo real se ha interrumpido.'));
       return true;
     } catch (e) {
-      current.current = before; setBoard(before); setError(e.message || 'No se ha guardado el cambio.');
+      current.current = before;
+      lastRevision.current = Number(before._sync?.version || 0);
+      setBoard(before);
+      setError(e.message || 'No se ha guardado el cambio.');
       return false;
-    } finally { updating.current = false; }
+    } finally {
+      updating.current = false;
+      if (incomingWhileSaving.current) {
+        const pending = incomingWhileSaving.current;
+        incomingWhileSaving.current = null;
+        receiveBoard(pending);
+      }
+    }
   }
   const updateFigures = transform => commit(s => {
     const page = s.activeView;
@@ -237,8 +320,8 @@ export default function FamilyApp() {
     });
   }
   function editFigure(id, props) {
-    if (!canEdit) return;
-    updateFigures(arr => arr.some(f => f.uid === id) ? arr.map(f => f.uid === id ? { ...f, ...props } : f) : null);
+    if (!canEdit) return Promise.resolve(false);
+    return updateFigures(arr => arr.some(f => f.uid === id) ? arr.map(f => f.uid === id ? { ...f, ...props } : f) : null);
   }
   function changeView(next) {
     if (!canEdit || next === view) return;
@@ -272,10 +355,10 @@ export default function FamilyApp() {
     const y = clamp((e.clientY - rect.top) / rect.height * 100, 0, 100);
     if (!ping && performance.now() - cooldown.current < 42) return;
     cooldown.current = performance.now();
-    channel.current.send({ type: 'broadcast', event: 'pointer', payload: { role, x, y, view: current.current.activeView, ping } });
+    channel.current.send({ type: 'broadcast', event: 'pointer', payload: { from: clientId.current, role, x, y, view: current.current.activeView, ping } });
   }
   function hidePointer() {
-    channel.current?.send({ type: 'broadcast', event: 'pointer', payload: { role, hidden: true } });
+    channel.current?.send({ type: 'broadcast', event: 'pointer', payload: { from: clientId.current, role, hidden: true } });
   }
   function startDrag(e, figure) {
     if (!canEdit || e.button !== 0) return;
@@ -289,14 +372,21 @@ export default function FamilyApp() {
     reportPointer(e);
     const d = drag.current;
     if (!d || !canEdit) return;
-    setDraft({ uid: d.uid, x: clamp(d.x + (e.clientX - d.startX) * 100 / d.width, 8, 92), y: clamp(d.y + (e.clientY - d.startY) * 100 / d.height, 12, 89) });
+    const next = { uid: d.uid, x: clamp(d.x + (e.clientX - d.startX) * 100 / d.width, 8, 92), y: clamp(d.y + (e.clientY - d.startY) * 100 / d.height, 12, 89) };
+    setDraft(next);
+    // Previsualización remota mientras se arrastra, sin escribir a la base de datos en cada píxel.
+    if (connected && performance.now() - dragCooldown.current > 45) {
+      dragCooldown.current = performance.now();
+      channel.current?.send({ type: 'broadcast', event: 'figure_move', payload: { from: clientId.current, view: current.current.activeView, ...next } });
+    }
   }
-  function endDrag(e) {
+  async function endDrag(e) {
     const d = drag.current; drag.current = null;
     if (!d) return;
     const next = { x: clamp(d.x + (e.clientX - d.startX) * 100 / d.width, 8, 92), y: clamp(d.y + (e.clientY - d.startY) * 100 / d.height, 12, 89) };
     setDraft(null);
-    if (Math.abs(next.x - d.x) + Math.abs(next.y - d.y) > .2) editFigure(d.uid, next);
+    if (Math.abs(next.x - d.x) + Math.abs(next.y - d.y) > .2) await editFigure(d.uid, next);
+    channel.current?.send({ type: 'broadcast', event: 'figure_drop', payload: { from: clientId.current, uid: d.uid } });
   }
   function exportScene() {
     const items = placed.map(f => {
@@ -351,7 +441,7 @@ export default function FamilyApp() {
         <div className="family-board" ref={boardElement} onPointerMove={reportPointer} onPointerLeave={hidePointer} onPointerDown={e => { if (e.target === e.currentTarget) { setSelected(null); reportPointer(e, true); } }}>
           {!placed.length && <div className="family-empty"><span aria-hidden="true">◌</span><strong>Este espacio es tuyo</strong><p>Selecciona un muñeco del catálogo para empezar.</p></div>}
           {placed.map(f => {
-            const t = templateOf(f.templateId); const pos = draft?.uid === f.uid ? draft : f;
+            const t = templateOf(f.templateId); const pos = draft?.uid === f.uid ? draft : remoteDraft?.uid === f.uid && remoteDraft?.view === view ? remoteDraft : f;
             return <button key={f.uid} type="button" aria-label={f.label + '. Arrastra para mover'} className={'family-placed' + (selected === f.uid ? ' selected' : '')} style={{ left: pos.x + '%', top: pos.y + '%' }} onPointerDown={e => startDrag(e, f)} onPointerMove={dragMove} onPointerUp={endDrag} onPointerCancel={() => { drag.current = null; setDraft(null); }} onClick={e => { e.stopPropagation(); setSelected(f.uid); }}>
               <Figure template={t} direction={f.direction || 'frente'}/><span className="family-placed-name">{f.label || 'Sin nombre'}</span>
             </button>;
